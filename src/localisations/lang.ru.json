@@ -1,4 +1,9 @@
 {
-    "game.title": "Еда: Три в ряд",
-    "menu.start_btn": "Играть"
+    "game.title": "Космическая аркада",
+    "game.score_text": "Очки: ",
+    "game.start.text": "Нажмите любую клавишу, чтобы начать игру",
+    "game.lose_text": "Вы проиграли!",
+    "game.best_score_text": "Рекорд: ",
+    "game.restart.text": "Начать заново",
+    "game.continue.text": "Продолжить"
 }

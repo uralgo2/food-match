@@ -9,8 +9,28 @@
       }
     </style>
     <script type="module" src="/src/index.ts"></script>
+    <link rel="stylesheet" href="/public/style.css">
   </head>
   <body>
-    <div id="game"></div>
+
+    <div id="game">
+      <div id="score_text"></div>
+      <div id="gameover" class="hidden">
+        <p id="lose_text">Вы проиграли!</p>
+        <p id="total_score_text">Очки: 10</p>
+        <p id="best_score_text">Рекорд: 19</p>
+
+        <button id="restart_button">
+          Начать заново
+        </button>
+
+        <button id="revive_show_add_button">
+          Продолжить
+        </button>
+      </div>
+      <div id="startgame">
+        <p id="startgame_text"></p>
+      </div>
+    </div>
   </body>
 </html>

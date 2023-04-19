@@ -5,10 +5,16 @@ export default {
     parent: 'game',
     backgroundColor: '#33A5E7',
     pixelArt: true,
-    zoom: 5,
+    zoom: 0,
+    physics: {
+        default: 'arcade',
+        arcade: {
+            debug: true
+        }
+    },
     scale: {
-        width: 256,
-        height: 256,
+        width: '100%',
+        height: '100%',
         mode: Phaser.Scale.FIT,
         autoCenter: Phaser.Scale.CENTER_BOTH
     }

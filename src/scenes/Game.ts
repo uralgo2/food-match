@@ -1,48 +1,33 @@
 import Phaser from 'phaser';
 import init from './../scripts/Initializator'
 import {Localisation} from "../scripts/Localisation"
-import {Food} from "../scripts/Food";
-import Key = Phaser.Input.Keyboard.Key;
+import replace from "@rollup/plugin-replace";
 
-const MapXSize = 8, MapOffsetX = 72
-const MapYSize = 8, MapOffsetY = 72
-const MapSeqLength = 3
-interface FoodPoint {
-    food: Food,
-    obj: Phaser.GameObjects.Sprite,
-    x: number,
-    y: number
-}
 interface vec2<T>{
     x: T, y: T
 }
-interface DragFoodPointData {
-    foodPoint: FoodPoint,
-    gameObject: Phaser.GameObjects.Sprite,
-    startDragPosition:  vec2<number>,
-    currentDragPosition: vec2<number>,
-    swapsFoodPoint: FoodPoint | undefined,
-    swapDirection: Direction
-}
 
-enum Direction {
-    None,
-    Up,
-    Down,
-    Right,
-    Left
-}
+const SHIP_SPEED = 4
+const ASTEROID_ROTATION_SPEED = 0.025;
 export default class MatchThree extends Phaser.Scene {
     private m_local: Localisation
-    private m_foods: Food[] = []
-
-    private m_map: Map<string, FoodPoint> = new Map<string, FoodPoint>()
-
-    private m_scoreText: Phaser.GameObjects.Text | undefined
-
     private m_score = 0
-    private dragData : DragFoodPointData | undefined
+    private ship: Phaser.GameObjects.Sprite | undefined
+    private asteroidPool: Phaser.GameObjects.Sprite[] = []
+    private activeAsteroids: Set<Phaser.GameObjects.Sprite> = new Set<Phaser.GameObjects.Sprite>()
+    private spawnAsteroids: boolean = false
+    private asteroidSpeed: number = 2
+    private difficult: number = 1000
+    private isGameOver: boolean = false
+    private isGameStarted: boolean = false
+    private scaleModificator: number = 1
+    get m_best(): number {
+        return Number(localStorage.getItem('bestScore') || 0)
+    }
 
+    set m_best(val: number) {
+        localStorage.setItem('bestScore', String(val))
+    }
     constructor() {
         const {localisation} = init()
         const title = localisation.GetLocal('game.title')
@@ -52,306 +37,228 @@ export default class MatchThree extends Phaser.Scene {
     }
 
     preload() {
-        this.load.image('apple-texture', 'assets/Food/Apple.png')
-        this.load.image('apple-worm-texture', 'assets/Food/AppleWorm.png')
-        this.load.image('avocado-texture', 'assets/Food/Avocado.png')
-        this.load.image('bacon-texture', 'assets/Food/Bacon.png')
+        this.load.spritesheet('ship', 'assets/ship.png', {
+            frameHeight: 24,
+            frameWidth: 16,
+        })
+        this.load.image('asteroid', 'assets/asteroid.png')
 
-        const apple = new Food('apple', 2, 'apple-texture')
-        const appleWorm = new Food('apple-worm', -5, 'apple-worm-texture')
-        const avocado = new Food('avocado', 4, 'avocado-texture')
-        const bacon = new Food('bacon', 6, 'bacon-texture')
+        this.scaleModificator = ((24*this.game.scale.height) / 256) / 24
 
-        this.m_foods = [apple, appleWorm, avocado, bacon]
+        document.getElementById("startgame_text")!
+            .textContent = this.m_local.GetLocal('game.start.text')
     }
 
     create() {
-        let x = 0
-        this.generateMap()
+        this.ship = this.add.sprite(128, this.game.scale.height * 0.75, 'ship')
 
-        this.input.keyboard.on('keydown-SPACE', this.checkMap, this);
-        this.input.on('pointerdown', this.handleOnFoodClick, this)
+        this.ship.setScale(this.scaleModificator)
+        this.physics.add.existing(this.ship)
 
-        this.m_scoreText = this.add.text(0, 16, 'Score: 0')
+        this.ship.anims.create({
+            key: 'default',
+            frames: 'ship',
+            frameRate: 30,
+            repeat:-1
+        })
+
+        this.ship.anims.play('default')
+
+        this.ship.setInteractive({ draggable: true })
+
+        this.input.on('drag', (event: Phaser.Input.Pointer, dragX: number) => {
+            this.ship!.x = Math.max(Math.min(event.x, this.game.scale.width - 8*this.scaleModificator), 8*this.scaleModificator)
+        })
+        document.onclick = () => {
+            this.startGame()
+
+            document.onclick = null
+        }
+        this.input.keyboard.on('keydown', (event: KeyboardEvent) => {
+            const key = event.key
+
+            if(!this.isGameStarted)
+            {
+                this.startGame()
+            }
+            switch (key){
+                case "d":
+                case "D":
+                case "ArrowRight":
+                    if(this.ship!.x + SHIP_SPEED < this.game.scale.width - 8*this.scaleModificator)
+                        this.ship!.x += SHIP_SPEED;
+                    else
+                        this.ship!.x = this.game.scale.width - 8*this.scaleModificator
+
+                    break
+
+                case "a":
+                case "A":
+                case "ArrowLeft":
+                    if(this.ship!.x - SHIP_SPEED > 8*this.scaleModificator)
+                        this.ship!.x -= SHIP_SPEED;
+                    else
+                        this.ship!.x = 8*this.scaleModificator
+
+                    break
+            }
+        })
+
+        this.setScoreText()
     }
+
+
+    private startGame() {
+        this.isGameStarted = true
+        this.startSpawnCycle()
+
+
+        document.getElementById("startgame")!.classList.add('hidden')
+    }
+
     update(time: number, delta: number) {
-    }
+        if(this.isGameOver || !this.isGameStarted) return
 
-    instantiateFood(food: Food, x: number, y: number) {
-        const obj = this.add.sprite(x, y, food.textureName)
+        for (const activeAsteroid of this.activeAsteroids) {
+            activeAsteroid.y += this.asteroidSpeed;
+            activeAsteroid.rotation += ASTEROID_ROTATION_SPEED
+            if(activeAsteroid.y >= (this.game.scale.height + 38*this.scaleModificator)){
+                this.removeAsteroid(activeAsteroid)
 
-        return obj
-    }
+                this.m_score += 1
+                this.setScoreText()
+                this.difficult = Math.max(1000 * Math.pow(0.99, (this.m_score + 2) / 2), 280) * this.scaleModificator
+                this.asteroidSpeed = Math.min(2 * Math.pow(1.01, (this.m_score + 2) / 2), 5) * this.scaleModificator
 
-    makeInteractive(foodPoint: FoodPoint, obj: Phaser.GameObjects.Sprite){
-        obj
-            .setInteractive({ draggable: true })
-            .on('dragstart', (pointer: Phaser.Input.Pointer, dragX: number, dragY: number) => {
-                this.dragData = {
-                    currentDragPosition: {x: dragX, y: dragY},
-                    foodPoint: foodPoint,
-                    gameObject: obj,
-                    startDragPosition: {x: dragX, y: dragY},
-                    swapsFoodPoint: undefined,
-                    swapDirection: Direction.None
-                }
-            }, this);
-        obj.on('drag', (pointer: Phaser.Input.Pointer, dragX: number, dragY: number) => {
-            this.dragData!.currentDragPosition = {x: dragX, y: dragY}
-            const startPos = this.dragData?.startDragPosition!
-
-            if(startPos.x > dragX)
-                this.dragData!.swapDirection = Direction.Right
-            else if(startPos.x < dragX)
-                this.dragData!.swapDirection = Direction.Left
-            else if(startPos.y < dragY)
-                this.dragData!.swapDirection = Direction.Down
-            else if(startPos.y > dragY)
-                this.dragData!.swapDirection = Direction.Up
-
-
-            obj.setPosition(dragX, dragY);
-        }, this);
-        obj.on('dragend', (pointer: Phaser.Input.Pointer, dragX: number, dragY: number, dropped: boolean) => {
-            let objects: FoodPoint[] = []
-
-            switch (this.dragData!.swapDirection){
-                case Direction.Down:
-                    this.dragData!.swapsFoodPoint = this.m_map.get(MatchThree.getPosition(
-                        this.dragData!.foodPoint.x,
-                        this.dragData!.foodPoint.y + 1,
-                    ))
-                    break
-                case Direction.Left:
-                    this.dragData!.swapsFoodPoint = this.m_map.get(MatchThree.getPosition(
-                        this.dragData!.foodPoint.x - 1,
-                        this.dragData!.foodPoint.y,
-                    ))
-                    break
-                case Direction.Up:
-                    this.dragData!.swapsFoodPoint = this.m_map.get(MatchThree.getPosition(
-                        this.dragData!.foodPoint.x,
-                        this.dragData!.foodPoint.y - 1,
-                    ))
-                    break
-                case Direction.Right:
-                    this.dragData!.swapsFoodPoint = this.m_map.get(MatchThree.getPosition(
-                        this.dragData!.foodPoint.x + 1,
-                        this.dragData!.foodPoint.y,
-                    ))
-                    break
+                console.log({
+                    difficult: this.difficult,
+                    asteroidSpeed: this.asteroidSpeed,
+                    poolSize: this.asteroidPool.length,
+                    activeAsteroidsCount: this.activeAsteroids.size
+                })
             }
 
-            this.swapFood(this.dragData?.foodPoint!, this.dragData?.swapsFoodPoint!)
+            const isCollidesWithShip = this.physics.collide(activeAsteroid, this.ship)
 
-            switch (this.dragData!.swapDirection){
-                case Direction.Down:
-                    objects = this.checkDownNeighbours(
-                        this.dragData!.foodPoint.x,
-                        this.dragData!.foodPoint.y,
-                        this.dragData!.foodPoint.food
-                    )
-                    break
-                case Direction.Left:
-                    objects = this.checkLeftNeighbours(
-                        this.dragData!.foodPoint.x,
-                        this.dragData!.foodPoint.y,
-                        this.dragData!.foodPoint.food
-                    )
-                    break
-                case Direction.Up:
-                    objects = this.checkUpNeighbours(
-                        this.dragData!.foodPoint.x,
-                        this.dragData!.foodPoint.y,
-                        this.dragData!.foodPoint.food
-                    )
-                    break
-                case Direction.Right:
-                    objects = this.checkRightNeighbours(
-                        this.dragData!.foodPoint.x,
-                        this.dragData!.foodPoint.y,
-                        this.dragData!.foodPoint.food
-                    )
-                    break
-            }
-
-            if(objects.length){
-                this.replaceFoods(objects)
-            }
-            else {
-
-                this.swapFood(this.dragData?.foodPoint!, this.dragData?.swapsFoodPoint!)
-
-
-            }
-        }, this);
-    }
-    static getPosition(x: number, y: number){
-        return x + ':' + y
-    }
-    swapFood(dst: FoodPoint, src: FoodPoint){
-        const tmp = dst
-        const pos = {x: dst.x, y: dst.y}
-
-        dst.x = src.x
-        dst.y = src.y
-
-        src.x = pos.x
-        src.y = pos.y
-
-        this.m_map.set(MatchThree.getPosition(dst.x, dst.y), dst)
-        this.m_map.set(MatchThree.getPosition(src.x, src.y), src)
-
-        dst.obj.setPosition(MapOffsetX + dst.x * 16, MapOffsetY + dst.y * 16)
-        src.obj.setPosition(MapOffsetX + src.x * 16, MapOffsetY + src.y * 16)
-    }
-    handleOnFoodClick(pointer: Phaser.Input.Pointer, objectsClicked: Phaser.GameObjects.GameObject[]){
-        const obj = pointer
-    }
-    generateMap() {
-        for (let value of this.m_map.values()) {
-            value.obj.destroy()
-        }
-        this.m_map.clear()
-
-        for (let x = 0; x < MapXSize; x++) {
-            for (let y = 0; y < MapYSize; y++) {
-                const rndIdx = Math.round(Math.random() * (this.m_foods.length - 1))
-                const food = this.m_foods.at(rndIdx)!
-
-                const obj = this.instantiateFood(food, MapOffsetX + x * 16, MapOffsetY + y * 16)
-                const foodPoint = {
-                    food: food,
-                    obj: obj,
-                    x: x,
-                    y: y
-                }
-
-                this.makeInteractive(foodPoint, obj)
-
-                this.m_map.set(
-                    MatchThree.getPosition(x, y),
-                    foodPoint
-                )
+            if(isCollidesWithShip){
+                console.log('gameover')
+                this.gameOver()
             }
         }
     }
-    replaceFoods(foods: FoodPoint[]){
-        for (let foodPoint of foods) {
-            const rndIdx = Math.round(Math.random() * (this.m_foods.length - 1))
-            const food = this.m_foods[rndIdx]
-            foodPoint.obj.destroy()
-            this.m_score += foodPoint.food.points
+    private gameOver(){
+        this.spawnAsteroids = false
 
-            const obj = this.instantiateFood(food, MapOffsetX + foodPoint.x * 16, MapOffsetY + foodPoint.y * 16)
-            const newFoodPoint = {
-                food: food,
-                obj: obj,
-                x: foodPoint.x,
-                y: foodPoint.y
-            }
-            this.makeInteractive(newFoodPoint, obj)
-            this.m_map.set(
-                MatchThree.getPosition(foodPoint.x, foodPoint.y),
-                newFoodPoint
-            )
+        this.isGameOver = true
+
+        const gameoverEl = document.getElementById('gameover')!
+
+        gameoverEl.classList.remove('hidden')
+
+        const loseText = gameoverEl.querySelector('#lose_text')!
+        const scoreText = gameoverEl.querySelector('#total_score_text')!
+        const bestScoreText = gameoverEl.querySelector('#best_score_text')!
+        const restartBtn = gameoverEl.querySelector('#restart_button')! as HTMLButtonElement
+        const continueBtn = gameoverEl.querySelector('#revive_show_add_button')! as HTMLButtonElement
+
+        loseText.textContent = this.m_local.GetLocal('game.lose_text')
+        scoreText.textContent = this.m_local.GetLocal('game.score_text') + this.m_score
+        bestScoreText.textContent = this.m_local.GetLocal('game.best_score_text') + (this.m_score > this.m_best ? this.m_best = this.m_score : this.m_best)
+        restartBtn.textContent = this.m_local.GetLocal('game.restart.text')
+        continueBtn.textContent = this.m_local.GetLocal('game.continue.text')
+
+        restartBtn.onclick = () => {
+            this.restart()
         }
+
+        continueBtn.onclick = () => {
+
+        }
+
+    }
+    private startSpawnCycle(){
+        this.spawnAsteroids = true
+
+        const closure = () => {
+            if(!this.spawnAsteroids) return
+
+            this.spawnAsteroid()
+
+            setTimeout(closure,this.difficult)
+        }
+
+        setTimeout(closure)
     }
 
-    checkMap(): boolean {
-        let earned = false
-
-        const objectsToReplace = new Set<FoodPoint>()
-
-        const add = (a: FoodPoint[]) => {
-            for (let foodPoint of a) {
-                objectsToReplace.add(foodPoint)
-            }
-        }
-        for (let x = 0; x < MapXSize; x++) {
-            for (let y = 0; y < MapYSize; y++) {
-                const foodPoint = this.m_map.get(MatchThree.getPosition(x, y))
-
-                const curFood = foodPoint!.food
-
-                add(this.checkRightNeighbours(x, y, curFood))
-                add(this.checkLeftNeighbours(x, y, curFood))
-                add(this.checkDownNeighbours(x, y, curFood))
-                add(this.checkUpNeighbours(x, y, curFood))
-            }
-        }
-
-        this.replaceFoods(new Array<FoodPoint>(...objectsToReplace.values()))
-
-        this.m_scoreText!.text = "Score: " + this.m_score
-        return objectsToReplace.size > 0
+    private spawnAsteroid(){
+        const x = Math.max(
+            Math.min(
+            Math.random() * this.game.scale.width,
+                this.game.scale.width - 19*this.scaleModificator
+            ),
+            19*this.scaleModificator
+        )
+        this.addAsteroid(x, -20*this.scaleModificator)
     }
 
-    checkRightNeighbours(x: number, y: number, food: Food): FoodPoint[] {
-        const objs = []
+    private addAsteroid(x: number, y: number){
 
-        if(x + MapSeqLength >= MapXSize - 1) return []
+        let asteroid
 
-        for (let i = 0; i < MapSeqLength; i++) {
-            const neighbour = this.m_map.get(MatchThree.getPosition(x + i, y))!
+        if(this.asteroidPool.length !== 0) {
+            asteroid = this.asteroidPool.pop()!
+            asteroid.setVisible(true)
+            asteroid.addToUpdateList()
+            asteroid.x = x
+            asteroid.y = y
+        }
+        else {
+            asteroid = this.add.sprite(x, y, 'asteroid')
+            asteroid.setScale(this.scaleModificator)
+            this.physics.add.existing(asteroid)
+            const body = asteroid.body as Phaser.Physics.Arcade.Body
 
-            if (neighbour.food !== food)
-                return []
+            body.setSize(asteroid.width*0.75, this.scaleModificator)
+            body.offset.y = asteroid.height - this.scaleModificator
 
-            objs.push(neighbour)
         }
 
-        return objs
+
+        this.activeAsteroids.add(asteroid)
+
+
+        return asteroid
     }
 
-    checkLeftNeighbours(x: number, y: number, food: Food): FoodPoint[] {
-        const objs = []
+    private removeAsteroid(asteroid: Phaser.GameObjects.Sprite){
+        this.activeAsteroids.delete(asteroid)
 
-        if(x - MapSeqLength < 0) return []
+        asteroid.setVisible(false)
+        asteroid.removeFromUpdateList()
 
-        for (let i = 0; i < MapSeqLength; i++) {
-            const neighbour = this.m_map.get(MatchThree.getPosition(x - 1, y))!
-
-            if (neighbour.food !== food)
-                return []
-
-            objs.push(neighbour)
-        }
-
-        return objs
+        this.asteroidPool.push(asteroid)
     }
 
-    checkDownNeighbours(x: number, y: number, food: Food): FoodPoint[] {
-        const objs = []
-
-        if(y + MapSeqLength >= MapYSize - 1) return []
-
-        for (let i = 0; i < MapSeqLength; i++) {
-            const neighbour = this.m_map.get(MatchThree.getPosition(x, y + i))!
-
-            if (neighbour.food !== food)
-                return []
-
-            objs.push(neighbour)
-        }
-
-        return objs
+    private setScoreText(){
+        document.getElementById("score_text")!
+            .textContent = this.m_local.GetLocal('game.score_text') + this.m_score
     }
 
-    checkUpNeighbours(x: number, y: number, food: Food): FoodPoint[] {
-        const objs = []
+    private restart() {
+        this.isGameOver = false
+        this.m_score = 0
 
-        if(y - MapSeqLength < 0) return []
+        this.removeActiveAsteroids()
+        this.startSpawnCycle()
 
-        for (let i = 0; i < MapSeqLength; i++) {
-            const neighbour = this.m_map.get(MatchThree.getPosition(x, y - i))!
+        const gameoverEl = document.getElementById('gameover')!
 
-            if (neighbour.food !== food)
-                return []
+        gameoverEl.classList.add('hidden')
+    }
 
-            objs.push(neighbour)
+    private removeActiveAsteroids() {
+        for (const activeAsteroid of this.activeAsteroids) {
+            this.removeAsteroid(activeAsteroid)
         }
-
-        return objs
     }
 }

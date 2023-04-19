@@ -1,4 +1,10 @@
 {
-    "game.title": "Food: Match Three",
-    "menu.start_btn": "Play"
+    "game.title": "Space arcade",
+    "menu.start_btn": "Play",
+    "game.score_text": "Score: ",
+    "game.start.text": "Press any key to start the game",
+    "game.lose_text": "You have lost!",
+    "game.best_score_text": "Best: ",
+    "game.restart.text": "Restart",
+    "game.continue.text": "Continue"
 }
